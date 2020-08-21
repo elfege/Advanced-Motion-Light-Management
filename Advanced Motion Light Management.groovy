@@ -14,7 +14,7 @@ import java.text.SimpleDateFormat
 import groovy.transform.Field
 import groovy.json.JsonOutput
 
-@Field static boolean cmdByApp = false
+
 @Field static int delays = 0
 
 
@@ -34,12 +34,11 @@ preferences {
     page name:"pageSetup"
 
 }
-
 def pageSetup() {
 
     boolean haveDim = false
 
-    if(state.paused)
+    if(atomicState.paused)
     {
         log.debug "new app label: ${app.label}"
         while(app.label.contains(" (Paused) "))
@@ -54,7 +53,6 @@ def pageSetup() {
         while(app.label.contains(" (Paused) ")){app.updateLabel(app.label.minus("(Paused)" ))}
         log.debug "new app label: ${app.label}"
     }
-   
 
 
     def pageProperties = [
@@ -66,19 +64,19 @@ def pageSetup() {
     ]
 
     return dynamicPage(pageProperties) {
-        if(state.paused == true)
+        if(atomicState.paused == true)
         {
-            state.button_name = "resume"
-            logging("button name is: $state.button_name")
+            atomicState.button_name = "resume"
+            logging("button name is: $atomicState.button_name")
         }
         else 
         {
-            state.button_name = "pause"
-            logging("button name is: $state.button_name")
+            atomicState.button_name = "pause"
+            logging("button name is: $atomicState.button_name")
         }
         section("")
         {
-            input "pause", "button", title: "$state.button_name"
+            input "pause", "button", title: "$atomicState.button_name"
 
         }
 
@@ -105,7 +103,7 @@ def pageSetup() {
                 input "timeModes", "mode", title: "Select modes", multiple: true, submitOnChange: true
                 if(timeModes){
                     def i = 0
-                    state.dimValMode = []
+                    atomicState.dimValMode = []
                     def dimValMode = []
                     for(timeModes.size() != 0; i < timeModes.size(); i++){
                         input "noMotionTime${i}", "number", required:true, title: "select a timeout value for ${timeModes[i]}"
@@ -142,7 +140,7 @@ def pageSetup() {
 
         section()
         {
-            def cap = switches.findAll{it.hasCapability("dimmer")}
+            def cap = switches.findAll{it.hasCapability("SwitchLevel")}
 
             if(cap.size()>0)
             {
@@ -155,19 +153,26 @@ def pageSetup() {
         {
             input "restrictedModes", "mode", title:"Pause this app if location is in one of these modes", required: false, multiple: true
         }
-        
+
         section() {
             label title: "Assign a name", required: false
         }
         section("logging")
         {
             input "enablelogging", "bool", title:"Enable logging", value:false, submitOnChange:true
-            input "descriptiontext", "bool", title:"Enable description text", value:false, submitOnChange:true
-
+            input "enabledescriptiontext", "bool", title:"Enable description text", value:false, submitOnChange:true
+        }
+        section("Watchdog")
+        {
+            input "watchdog", "bool", title: "Run the watchdog (reboot your hub when it takes too long to respond to events and device commands)", defaultValue: false, submitOnChange:true 
+            if(watchdog)
+            {
+                input "ip", "text", title: "Type the IP address of your hub"
+            }
         }
         section()
         {
-            if(state.installed)
+            if(atomicState.installed)
             {
                 input "update", "button", title: "UPDATE"
                 input "run", "button", title: "RUN"
@@ -176,31 +181,26 @@ def pageSetup() {
     }
 }
 
-
-
 def installed() {
     logging("Installed with settings: ${settings}")
 
-    state.lastReboot = now()
-    state.installed = true
+    atomicState.lastReboot = now()
+    atomicState.installed = true
     initialize()
 
 }
 def updated() {
     descriptiontext "updated with settings: ${settings}"
-    state.installed = true        
-    state.fix = 0
+    atomicState.installed = true        
+    atomicState.fix = 0
     unsubscribe()
     unschedule()
     initialize()
 }
-
 def initialize() {
-    
-    state.activeEvtTime = now()            
 
     if(enablelogging == true){
-        state.EnableDebugTime = now()
+        atomicState.EnableDebugTime = now()
         runIn(1800, disablelogging)
         descriptiontext "disablelogging scheduled to run in ${1800/60} minutes"
     }
@@ -209,16 +209,15 @@ def initialize() {
         log.warn "debug logging disabled!"
     }
 
-    int i = 0
-    int s = 0
+    subscribe(motionSensors, "motion", mainHandler)
+    log.trace "${motionSensors} subscribed to mainHandler"
 
-    i = 0
-    s = motionSensors.size()
-    for(s!=0;i<s;i++)
+    if(watchdog)
     {
-        subscribe(motionSensors[i], "motion", mainHandler)
-        log.trace "${motionSensors[i]} subscribed to mainHandler"
+        subscribe(motionSensors, "motion", motionHandler)
+        log.trace "${motionSensors} subscribed to - motionHandler -"
     }
+
 
     i = 0
     s = switches.size()
@@ -241,66 +240,19 @@ def initialize() {
     subscribe(location, "systemStart", hubEventHandler) // manage bugs and hub crashes
 
     subscribe(modes, "mode", locationModeChangeHandler)
-    state.timer = 1
-    schedule("0 0/${state.timer} * * * ?", master) 
-    state.lastRun = now() as long // time stamp to see if cron service is working properly
+    atomicState.timer = 1
+    schedule("0 0/${atomicState.timer} * * * ?", master) 
+    atomicState.lastRun = now() as long // time stamp to see if cron service is working properly
         logging("initialization done")
     //master()
 }
 
-def switchHandler(evt)
-{
-    logging "$evt.device is $evt.value Command came from this app: $cmdByApp"
-
-    cmdByApp = false
-}
-def locationModeChangeHandler(evt){
-    logging("$evt.name is now in $evt.value mode")   
-}
-def mainHandler(evt){
-
-    descriptiontext "${evt.name}: $evt.device is $evt.value"
-
-    if(location.mode in restrictedModes)
-    {
-        descriptiontext "location in restricted mode, doing nothing"
-    }
-    else 
-    {
-        if(evt.name == "motion" && evt.value == "active")
-        {
-            state.activeEvtTime = now()
-        }
-        master()
-    }
-}
-def hubEventHandler(evt){
-
-    if(location.mode in restrictedModes)
-    {
-        logging("App paused due to modes restrictions")
-        return
-    }
-    log.warn "HUB $evt.name"
-    if(evt.name == "systemStart")
-    {
-        log.warn "reset state.lastReboot = now()"
-        state.lastReboot = now()
-
-        updated()
-    }
-}
 def appButtonHandler(btn) {
 
-    if(location.mode in restrictedModes)
-    {
-        logging("App paused due to modes restrictions")
-        return
-    }
     switch(btn) {
-        case "pause":state.paused = !state.paused
-        log.debug "state.paused = $state.paused"
-        if(state.paused)
+        case "pause":atomicState.paused = !atomicState.paused
+        log.debug "atomicState.paused = $atomicState.paused"
+        if(atomicState.paused)
         {
             log.debug "unsuscribing from events..."
             unsubscribe()  
@@ -314,13 +266,14 @@ def appButtonHandler(btn) {
             break
         }
         case "update":
-        state.paused = false
+        atomicState.paused = false
         updated()
         break
         case "run":
-        if(!state.paused)  
+        if(!atomicState.paused)  
         {
             master()
+            dim()
         }
         else
         {
@@ -330,6 +283,111 @@ def appButtonHandler(btn) {
 
     }
 }
+def switchHandler(evt){
+    descriptiontext "$evt.device is $evt.value"
+
+
+    if(evt.value == "on")
+    {
+        atomicState.motionEventTime = atomicState.motionEventTime != null ? atomicState.motionEventTime : now()
+        atomicState.thisIsAMotionEvent = atomicState.thisIsAMotionEvent != null ? atomicState.thisIsAMotionEvent : false
+        atomicState.wtcEvts = atomicState.wtcEvts != null ? atomicState.wtcEvts : 0
+
+        int tolerance = 4000
+        int critical = 15000
+        long elapsed = now() - atomicState.motionEventTime // measure the elapsed time between last active motion event and switch event
+        int limit = 5 // after 5 occurences in a row, reboot
+        boolean justRestarted = now() - atomicState.lastReboot < 120000
+
+        if(atomicState.thisIsAMotionEvent)
+        {
+            if(!justRestarted)
+            {
+                if(elapsed > tolerance && atomicState.cmdFromApp)
+                {
+                    atomicState.wtcEvts += 1
+                    def message = elapsed > critical ? "CRITICAL DELAY (${elapsed/1000}seconds), REBOOTING..." : "$app.label took ${elapsed/1000} seconds to execute (occurence #${atomicState.wtcEvts})"
+                    log.warn message
+
+                    if(atomicState.wtcEvts > limit || elapsed > critical)
+                    {
+                        reboot()
+                    }
+                }
+                else 
+                {
+                    atomicState.wtcEvts = 0
+                    log.trace "Watchdog OK"
+                }
+
+            }
+            else 
+            {
+                log.warn "Hub has restarted less than 2 minutes ago, watchdog eval skipped"
+            }
+
+        }
+        else 
+        {
+            log.warn "Switch event other than motion triggered, watchdog eval skipped"
+        }            
+    }
+
+
+    atomicState.thisIsAMotionEvent = false
+    atomicState.cmdFromApp = false
+
+}
+def locationModeChangeHandler(evt){
+    logging("$evt.name is now in $evt.value mode")   
+}
+def mainHandler(evt){
+
+    if(location.mode in restrictedModes)
+    {
+        descriptiontext "location in restricted mode, doing nothing"
+        return
+    }
+
+    descriptiontext "${evt.name}: $evt.device is $evt.value"
+
+    if(evt.value in ["open", "active"]) 
+    {
+        switches.on() // bypass the on() method for shorter response time
+    }
+    else 
+    {
+        master()
+    }
+
+}
+def motionHandler(evt){
+    descriptiontext "$evt.device is $evt.value"
+
+    if(evt.value == "active")
+    {
+        atomicState.motionEventTime = now()
+        atomicState.thisIsAMotionEvent = true // to distinguis from routine run using StillActive collection (avoids false watchdog positives)
+        on() // to prevent watchdog false positives
+    }
+}
+def hubEventHandler(evt){
+
+    if(location.mode in restrictedModes)
+    {
+        logging("App paused due to modes restrictions")
+        return
+    }
+    log.warn "HUB $evt.name"
+    if(evt.name == "systemStart")
+    {
+        log.warn "reset atomicState.lastReboot = now()"
+        atomicState.lastReboot = now()
+
+        updated()
+    }
+}
+
 
 def master(){
 
@@ -338,37 +396,29 @@ def master(){
         logging("App paused due to modes restrictions")
         return
     }
-    logging("**********${new Date().format("h:mm:ss a", location.timeZone)}****************")
-    logging("Restricted modes are: $restrictedModes")
 
-    if(location.mode in restrictedModes)
+    if(!stillActive())
     {
-        descriptiontext("location in restricted mode, doing nothing")
-        return
+        off()  
     }
     else 
     {
-        if(!stillActive())
-        {
-            off()
-        }
-        else 
-        {
-            on()
-        }
+        on() 
 
-        if(enabledebug && now() - state.EnableDebugTime > 1800000)
-        {
-            descriptiontext "Debug has been up for too long..."
-            disablelogging() 
-        }
     }
-    state.lastRun = now() // time stamp to see if cron service is working properly
+
+    if(enabledebug && now() - atomicState.EnableDebugTime > 1800000)
+    {
+        descriptiontext "Debug has been up for too long..."
+        disablelogging() 
+    }
+
+    atomicState.lastRun = now() // time stamp to see if cron service is working properly
     logging("END")
 }
 
 def reboot(){
-    runCmd("192.168.10.70", "8080", "/hub/reboot")// reboot
+    runCmd(ip, "8080", "/hub/reboot")// reboot
 }
 def timeout(){
     def result = noMotionTime // default
@@ -388,67 +438,58 @@ def timeout(){
     logging("timeout() returns $result")
     return result
 }
-def off(){
-
-    boolean anyOn = switches.findAll{it.currentValue("switch") == "on"}
-    logging "anyOn = $anyOn"
-    if(anyOn){
-        descriptiontext "turning off $switches"
-        switches.off()
-    }
-    else 
-    {
-        descriptiontext "$switches already off"
-    }
-
-}
-def on(){
-
-    cmdByApp = true
-
-    if(useDim && contacts)
-    {
-        dim()
-    }
-    else
-    {
-        boolean anyOff = switches.findAll{it.currentValue("switch") == "off"}
-        logging "anyOff = $anyOff"
-        if(anyOff){
-            switches.on()
-            descriptiontext "$switches turned on"
-        } 
-        else 
-        {
-            descriptiontext "$switches already on"
-        }
-    }
-
-}
-
 
 def dim(){
-    boolean closed = !contactsAreOpen()
-    if(closed)
-    {
-        switches.setLevel(dimValClosed)
-        logging("$switches set to $dimValClosed 9zaeth")
-    }
-    else
-    {
-        if(!contactModeOk()) // ignore if we are not in the contact mode and dim to dimValClosed
+    if(useDim && contacts){
+        boolean closed = !contactsAreOpen()
+        def switchesWithDimCap = switches.findAll{it.hasCapability("SwitchLevel")}
+        log.debug "list of devices with dimming capability = $listDim"
+        
+        log.info "switchesWithDimCap = $switchesWithDimCap"
+
+        int i = 0
+        int s = switchesWithDimCap.size()
+
+        if(closed)
         {
-            switches.setLevel(dimValClosed)
-            logging("$switches set to $dimValClosed 78fr")
+            if(WrongLevel(dimValClosed)){
+
+                for(s!=0;i<s;i++)
+                {
+                    switchesWithDimCap[i].setLevel(dimValClosed)
+                    logging("${switchesWithDimCap[i]} set to $dimValClosed 9zaeth")
+                }
+            }
         }
-        else 
+        else
         {
-            switches.setLevel(dimValOpen)
-            logging("$switches set to $dimValClosed 54fre")
+            if(!contactModeOk()) // ignore that location is not in the contact mode and dim to dimValClosed
+            {
+                if(WrongLevel(dimValClosed)){
+
+                    for(s!=0;i<s;i++)
+                    {
+                        switchesWithDimCap[i].setLevel(dimValClosed)
+                        logging("${switchesWithDimCap[i]} set to $dimValClosed 78fr")
+                    }
+                }
+            }
+            else 
+            {
+                if(WrongLevel(dimValOpen)){
+                    for(s!=0;i<s;i++)
+                    {
+                        switchesWithDimCap[i].setLevel(dimValOpen)
+                        logging("${switchesWithDimCap[i]} set to $dimValOpen 54fre")
+                    }
+                }
+            }
         }
     }
 }
-
+boolean WrongLevel(requiredLevel){    // if any returns the wrong level, then return true
+    return switches.findAll{it.currentValue("level") != requiredLevel} 
+}
 boolean contactModeOk(){
     boolean result = true
     if(contacts && contactModes)
@@ -474,6 +515,7 @@ boolean contactsAreOpen(){
     return openList.size() > 0
 }
 boolean stillActive(){
+
     int noMotionTime = timeout()
     long Dtime = noMotionTime * 1000 
     def unit = "seconds"
@@ -488,9 +530,9 @@ boolean stillActive(){
     int i = 0
     def thisDeviceEvents = []
     int events = 0
-    def currentlyActive = motionSensors.findAll{it.currentValue("motion") == "active"}
-    boolean AnyCurrentlyActive = currentlyActive.size() != 0
-    //log.warn "AnyCurrentlyActive: $AnyCurrentlyActive"
+    boolean AnyCurrentlyActive = motionSensors.findAll{it.currentValue("motion") == "active"}?.size() != 0
+    if(AnyCurrentlyActive) descriptiontext "AnyCurrentlyActive = $AnyCurrentlyActive"
+    if(AnyCurrentlyActive) return true  // for faster execution when true
 
     for(s != 0; i < s; i++) // collect active events
     { 
@@ -501,6 +543,36 @@ boolean stillActive(){
 
     descriptiontext("$events active events in the last $noMotionTime $timeUnit")
     return events > 0 || AnyCurrentlyActive
+}
+
+def off(){
+
+    def anyOn = switches.any{it -> it.currentValue("switch") == "on" }//.size() > 0
+    descriptiontext "anyOn = $anyOn"
+    if(anyOn){
+        descriptiontext "turning off $switches"
+        switches.off()
+    }
+    else 
+    {
+        descriptiontext "$switches already off"
+    }
+
+}
+def on(){
+    atomicState.cmdFromApp = true
+    boolean anyOff = switches.any{it -> it.currentValue("switch") == "off"}//.size() > 0
+    descriptiontext "anyOff = $anyOff"
+    if(anyOff){
+        switches.on()
+        descriptiontext "$switches turned on"
+    } 
+    else 
+    {
+        descriptiontext "$switches already on"
+    }
+
+    dim()
 }
 
 def runCmd(String ip,String port,String path) {
@@ -519,18 +591,18 @@ def runCmd(String ip,String port,String path) {
         log.error "${e}"
     }
 }
-
 def logging(msg){
+    //log.warn "enablelogging ? $enablelogging" 
     if (enablelogging) log.debug msg
-    if(debug && state.EnableDebugTime == null) state.EnableDebugTime = now()
+    if(debug && atomicState.EnableDebugTime == null) atomicState.EnableDebugTime = now()
 }
-
 def descriptiontext(msg){
-    //log.warn "descriptiontext = $descriptionText"    
-    if (descriptiontext) log.info msg
+    //log.warn "enabledescriptiontext = ${enabledescriptiontext}" 
+    if (enabledescriptiontext) log.info msg
 }
-
 def disablelogging(){
     app.updateSetting("enablelogging",[value:"false",type:"bool"])
     log.warn "logging disabled!"
 }
+
+
