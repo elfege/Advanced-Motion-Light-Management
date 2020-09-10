@@ -284,10 +284,11 @@ def appButtonHandler(btn) {
     }
 }
 def switchHandler(evt){
-    descriptiontext "$evt.device is $evt.value"
+    if(atomicState.paused) return
+    
+    descriptiontext "$evt.device is $evt.value (delay btw cmd and evt = ${now() - atomicState.mainHanderEventTime} milliseconds"
 
-
-    if(evt.value == "on")
+    if(watchdog && evt.value == "on")
     {
         atomicState.motionEventTime = atomicState.motionEventTime != null ? atomicState.motionEventTime : now()
         atomicState.thisIsAMotionEvent = atomicState.thisIsAMotionEvent != null ? atomicState.thisIsAMotionEvent : false
@@ -325,7 +326,6 @@ def switchHandler(evt){
             {
                 log.warn "Hub has restarted less than 2 minutes ago, watchdog eval skipped"
             }
-
         }
         else 
         {
@@ -343,36 +343,46 @@ def locationModeChangeHandler(evt){
 }
 def mainHandler(evt){
 
-    if(location.mode in restrictedModes)
-    {
+    //long T = now()
+
+    if(atomicState.paused) return
+    if(location.mode in restrictedModes){
         descriptiontext "location in restricted mode, doing nothing"
         return
-    }
-
-    descriptiontext "${evt.name}: $evt.device is $evt.value"
+    }    
+    
+    atomicState.mainHanderEventTime = now()
 
     if(evt.value in ["open", "active"]) 
     {
         switches.on() // bypass the on() method for shorter response time
+        
+        descriptiontext "$switches turned on by open contact"
+         if(watchdog && evt.value == "open")
+        {
+            atomicState.motionEventTime = now()
+            atomicState.thisIsAMotionEvent = true // same watchdog logic as with motion in this case
+        }
     }
     else 
     {
         master()
     }
+    //descriptiontext "${evt.name}: $evt.device is $evt.value"
+    //log.warn "exec time: ${(now() - T)} milliseconds"
 
 }
 def motionHandler(evt){
-    descriptiontext "$evt.device is $evt.value"
-
-    if(evt.value == "active")
-    {
+    if(atomicState.paused) return
+    if(watchdog && evt.value == "active"){
         atomicState.motionEventTime = now()
         atomicState.thisIsAMotionEvent = true // to distinguis from routine run using StillActive collection (avoids false watchdog positives)
         on() // to prevent watchdog false positives
     }
+    descriptiontext "$evt.device is $evt.value"
 }
 def hubEventHandler(evt){
-
+    if(atomicState.paused) return
     if(location.mode in restrictedModes)
     {
         logging("App paused due to modes restrictions")
@@ -388,23 +398,24 @@ def hubEventHandler(evt){
     }
 }
 
-
 def master(){
-
+    if(atomicState.paused) return
     if(location.mode in restrictedModes)
     {
         logging("App paused due to modes restrictions")
         return
     }
-
     if(!stillActive())
     {
         off()  
+        //switches.off()
+        //descriptiontext "turning off $switches"
     }
     else 
     {
         on() 
-
+        //switches.on()
+        //descriptiontext "$switches turned on"
     }
 
     if(enabledebug && now() - atomicState.EnableDebugTime > 1800000)
@@ -413,7 +424,7 @@ def master(){
         disablelogging() 
     }
 
-    atomicState.lastRun = now() // time stamp to see if cron service is working properly
+    if(watchdog) atomicState.lastRun = now() // time stamp to see if cron service is working properly
     logging("END")
 }
 
@@ -444,7 +455,7 @@ def dim(){
         boolean closed = !contactsAreOpen()
         def switchesWithDimCap = switches.findAll{it.hasCapability("SwitchLevel")}
         log.debug "list of devices with dimming capability = $listDim"
-        
+
         log.info "switchesWithDimCap = $switchesWithDimCap"
 
         int i = 0
