@@ -288,7 +288,8 @@ def initialize() {
     atomicState.timer = 1
     schedule("0 0/${atomicState.timer} * * * ?", master) 
     atomicState.lastRun = now() as long // time stamp to see if cron service is working properly
-        logging("initialization done")
+        atomicState.LuxCancelDeltaTime = 24*3600// 24 hours delta time in minutes (not millis)
+    logging("initialization done")
     //master()
 }
 
@@ -317,6 +318,8 @@ def appButtonHandler(btn) {
         case "run":
         if(!atomicState.paused)  
         {
+
+            log.trace "running master() loop()"
             master()
             dim()
         }
@@ -344,8 +347,8 @@ buttonEvtTypePause = $buttonEvtTypePause
     else if(buttonOverridesChecklux && evt.name == buttonEvtTypeLux && !atomicState.LuxCanceledbyButtonEvt)
     {
         atomicState.LuxCanceledbyButtonEvt = true 
-        def dt = 24*60*60
-        runIn(dt, resetLuxCancel)
+        atomicState.LuxCanceledbyButtonEvtTime = now()
+        runIn(atomicState.LuxCancelDeltaTime, resetLuxCancel)
         log.trace "LUX SENSITIVITY CANCELED FOR 24 HOURS"
     }
     else if(evt.name == buttonEvtTypePause) // pause function
@@ -353,8 +356,8 @@ buttonEvtTypePause = $buttonEvtTypePause
         atomicState.paused = !atomicState.paused
         atomicState.pauseDueToButtonEvent = atomicState.paused
         logging """
-        atomicState.paused = $atomicState.paused
-        atomicState.pauseDueToButtonEvent
+atomicState.paused = $atomicState.paused
+atomicState.pauseDueToButtonEvent
 """
         if(atomicState.paused)
         {
@@ -402,11 +405,12 @@ buttonEvtTypePause = $buttonEvtTypePause
     master()
 }
 def switchHandler(evt){
-    if(atomicState.paused && !atomicState.pauseDueToButtonEvent) return
-    if(atomicState.pauseDueToButtonEvent) { 
+    if(atomicState.pauseDueToButtonEvent || atomicState.LuxCanceledbyButtonEvtTime) { 
         checkPauseButton() 
+        checkLuxCancel()
         return
     }
+    if(atomicState.paused) return
 
     descriptiontext "$evt.device is $evt.value (delay btw cmd and evt = ${now() - atomicState.mainHanderEventTime} milliseconds"
 
@@ -464,14 +468,12 @@ def locationModeChangeHandler(evt){
     logging("$evt.name is now in $evt.value mode")   
 }
 def mainHandler(evt){
-
-    //long T = now()
-
-    if(atomicState.paused && !atomicState.pauseDueToButtonEvent) return
-    if(atomicState.pauseDueToButtonEvent) { 
+    if(atomicState.pauseDueToButtonEvent || atomicState.LuxCanceledbyButtonEvtTime) { 
         checkPauseButton() 
+        checkLuxCancel()
         return
     }
+    if(atomicState.paused) return
 
     if(location.mode in restrictedModes){
         descriptiontext "location in restricted mode, doing nothing"
@@ -518,11 +520,12 @@ def mainHandler(evt){
 
 }
 def motionHandler(evt){
-    if(atomicState.paused && !atomicState.pauseDueToButtonEvent) return
-    if(atomicState.pauseDueToButtonEvent) { 
+    if(atomicState.pauseDueToButtonEvent || atomicState.LuxCanceledbyButtonEvtTime) { 
         checkPauseButton() 
+        checkLuxCancel()
         return
     }
+    if(atomicState.paused) return
 
     if(watchdog && evt.value == "active"){
         atomicState.motionEventTime = now()
@@ -532,11 +535,12 @@ def motionHandler(evt){
     descriptiontext "$evt.device is $evt.value"
 }
 def hubEventHandler(evt){
-    if(atomicState.paused && !atomicState.pauseDueToButtonEvent) return
-    if(atomicState.pauseDueToButtonEvent) { 
+    if(atomicState.pauseDueToButtonEvent || atomicState.LuxCanceledbyButtonEvtTime) { 
         checkPauseButton() 
+        checkLuxCancel()
         return
     }
+    if(atomicState.paused) return
 
     if(location.mode in restrictedModes)
     {
@@ -554,11 +558,12 @@ def hubEventHandler(evt){
 }
 def illuminanceHandler(evt){
 
-    if(atomicState.paused && !atomicState.pauseDueToButtonEvent) return
-    if(atomicState.pauseDueToButtonEvent) { 
+    if(atomicState.pauseDueToButtonEvent || atomicState.LuxCanceledbyButtonEvtTime) { 
         checkPauseButton() 
+        checkLuxCancel()
         return
     }
+    if(atomicState.paused) return
     if(location.mode in restrictedModes)
     {
         log.debug "App paused due to modes restrictions"
@@ -588,11 +593,13 @@ def illuminanceHandler(evt){
 }
 
 def master(){
-    if(atomicState.paused && !atomicState.pauseDueToButtonEvent) return
-    if(atomicState.pauseDueToButtonEvent) { 
+
+    if(atomicState.pauseDueToButtonEvent || atomicState.LuxCanceledbyButtonEvtTime) { 
         checkPauseButton() 
+        checkLuxCancel()
         return
     }
+    if(atomicState.paused) return
 
     if(location.mode in restrictedModes)
     {
@@ -619,10 +626,16 @@ def master(){
     }
 
     if(watchdog) atomicState.lastRun = now() // time stamp to see if cron service is working properly
-    //logging("END")
+    log.trace "END"
 }
 
 def reboot(){
+    if(atomicState.pauseDueToButtonEvent || atomicState.LuxCanceledbyButtonEvtTime) { 
+        checkPauseButton() 
+        checkLuxCancel()
+        return
+    }
+    if(atomicState.paused) return
     runCmd(ip, "8080", "/hub/reboot")// reboot
 }
 def timeout(){
@@ -644,16 +657,47 @@ def timeout(){
     return result
 }
 def checkPauseButton(){
-    if(atomicState.paused && now() - atomicState.buttonPausedTime > pauseDuration * 60 * 1000)
+    if(atomicState.pauseDueToButtonEvent && now() - atomicState.buttonPausedTime > pauseDuration * 60 * 1000)
     {
         atomicState.paused = false
         log.warn "(periodic schedule version) PAUSE BUTTON TIME IS UP! Resuming operations (runIn method seems to have failed)"
+        atomicState.pauseDueToButtonEvent = false
         unschedule(checkPauseButton)
-        master()
+        //master() // feedback loop
     }
-    else if(atomicState.paused)
+    else if(atomicState.pauseDueToButtonEvent)
     {
         log.debug "APP PAUSED BY BUTTON EVENT"
+    }
+    else
+    {
+        log.error """NO CONDITION MET at checkPauseButton()!
+atomicState.paused = $atomicState.paused
+atomicState.pauseDueToButtonEvent = $atomicState.pauseDueToButtonEvent
+
+"""        
+    }
+}
+def checkLuxCancel(){
+    dt = atomicState.LuxCancelDeltaTime * 1000 // convert 24 hours counted in seconds, in millis
+    if(atomicState.LuxCanceledbyButtonEvt && now() - atomicState.LuxCanceledbyButtonEvtTime > dt)
+    {
+        log.warn "(periodic schedule version) LUX PAUSE TIME IS UP! Resuming operations (runIn method seems to have failed)"
+        atomicState.LuxCanceledbyButtonEvt = false
+        unschedule(resetLuxCancel)
+        //master() // feedback loop
+    }
+    else if(atomicState.LuxCanceledbyButtonEvt)
+    {
+        log.debug "LUX SENNSITIVITY BY BUTTON EVENT"
+    }
+    else
+    {
+        log.error """NO CONDITION MET at checkPauseButton()!
+atomicState.paused = $atomicState.paused
+atomicState.pauseDueToButtonEvent = $atomicState.pauseDueToButtonEvent
+
+"""        
     }
 }
 def cancelPauseButton(){
@@ -781,6 +825,7 @@ def dim(){
     {
         for(s!=0;i<s;i++)
         {
+            dimValClosed = dimValClosed < 10 ? 10 : dimValClosed
             switchesWithDimCap[i].setLevel(dimValClosed)
             logging("${switchesWithDimCap[i]} set to $dimValClosed 9zaeth")
         }
@@ -791,6 +836,7 @@ def dim(){
         {
             for(s!=0;i<s;i++)
             {
+                dimValClosed = dimValClosed < 10 ? 10 : dimValClosed
                 switchesWithDimCap[i].setLevel(dimValClosed)
                 logging("${switchesWithDimCap[i]} set to $dimValClosed 78fr")
             }
@@ -799,6 +845,7 @@ def dim(){
         {
             for(s!=0;i<s;i++)
             {
+                dimValOpen = dimValOpen < 10 ? 10 : dimValOpen
                 switchesWithDimCap[i].setLevel(dimValOpen)
                 logging("${switchesWithDimCap[i]} set to $dimValOpen 54fre")
             }
