@@ -118,7 +118,7 @@ def pageSetup() {
         {
             input "contacts", "capability.contactSensor", title: "Use contact sensors to trigger these lights", multiple:true, required: false, submitOnChange: true 
             def switchesWithDimCap = switches.findAll{it.hasCapability("Switch Level")}
-            log.debug "list of devices with dimming capability = $switchesWithDimCap"
+            logging "list of devices with dimming capability = $switchesWithDimCap"
             haveDim = switchesWithDimCap.size()>0
             logging "dimmer capability?:$haveDim"
             if(haveDim)
@@ -165,7 +165,7 @@ def pageSetup() {
                 {    
                     def list = ["pressed", "held", "doubleTapped"]
                     def remainingButtonCmds = list.findAll{it != buttonEvtTypePause}
-                    log.debug "available button actions for toggling lux sensitivity: $remainingButtonCmds"
+                    logging "available button actions for toggling lux sensitivity: $remainingButtonCmds"
 
                     input "buttonOverridesChecklux", "bool", title: "$pauseButton $remainingButtonCmds cancels/resumes illuminance sensitivity", submitOnChange:true
 
@@ -319,7 +319,7 @@ def appButtonHandler(btn) {
         if(!atomicState.paused)  
         {
 
-            log.trace "running master() loop()"
+            log.trace "running master() loop() at user's request"
             master()
             dim()
         }
@@ -405,9 +405,8 @@ atomicState.pauseDueToButtonEvent
     master()
 }
 def switchHandler(evt){
-    if(atomicState.pauseDueToButtonEvent || atomicState.LuxCanceledbyButtonEvtTime) { 
+     if(atomicState.pauseDueToButtonEvent) { 
         checkPauseButton() 
-        checkLuxCancel()
         return
     }
     if(atomicState.paused) return
@@ -468,9 +467,8 @@ def locationModeChangeHandler(evt){
     logging("$evt.name is now in $evt.value mode")   
 }
 def mainHandler(evt){
-    if(atomicState.pauseDueToButtonEvent || atomicState.LuxCanceledbyButtonEvtTime) { 
+    if(atomicState.pauseDueToButtonEvent) { 
         checkPauseButton() 
-        checkLuxCancel()
         return
     }
     if(atomicState.paused) return
@@ -520,9 +518,8 @@ def mainHandler(evt){
 
 }
 def motionHandler(evt){
-    if(atomicState.pauseDueToButtonEvent || atomicState.LuxCanceledbyButtonEvtTime) { 
+     if(atomicState.pauseDueToButtonEvent) { 
         checkPauseButton() 
-        checkLuxCancel()
         return
     }
     if(atomicState.paused) return
@@ -535,9 +532,8 @@ def motionHandler(evt){
     descriptiontext "$evt.device is $evt.value"
 }
 def hubEventHandler(evt){
-    if(atomicState.pauseDueToButtonEvent || atomicState.LuxCanceledbyButtonEvtTime) { 
+     if(atomicState.pauseDueToButtonEvent) { 
         checkPauseButton() 
-        checkLuxCancel()
         return
     }
     if(atomicState.paused) return
@@ -558,9 +554,8 @@ def hubEventHandler(evt){
 }
 def illuminanceHandler(evt){
 
-    if(atomicState.pauseDueToButtonEvent || atomicState.LuxCanceledbyButtonEvtTime) { 
+    if(atomicState.pauseDueToButtonEvent) { 
         checkPauseButton() 
-        checkLuxCancel()
         return
     }
     if(atomicState.paused) return
@@ -594,9 +589,8 @@ def illuminanceHandler(evt){
 
 def master(){
 
-    if(atomicState.pauseDueToButtonEvent || atomicState.LuxCanceledbyButtonEvtTime) { 
+    if(atomicState.pauseDueToButtonEvent) { 
         checkPauseButton() 
-        checkLuxCancel()
         return
     }
     if(atomicState.paused) return
@@ -626,7 +620,7 @@ def master(){
     }
 
     if(watchdog) atomicState.lastRun = now() // time stamp to see if cron service is working properly
-    log.trace "END"
+    logging "END"
 }
 
 def reboot(){
@@ -689,7 +683,7 @@ def checkLuxCancel(){
     }
     else if(atomicState.LuxCanceledbyButtonEvt)
     {
-        log.debug "LUX SENNSITIVITY BY BUTTON EVENT"
+        descriptiontext "LUX SENNSITIVITY PAUSED BY BUTTON EVENT"
     }
     else
     {
@@ -810,7 +804,10 @@ def on(){
         logging "$switches already on"
     }
 
-
+    if(atomicState.LuxCanceledbyButtonEvt)
+    {
+        checkLuxCancel()
+    }
 }
 def dim(){
 
