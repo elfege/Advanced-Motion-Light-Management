@@ -719,10 +719,9 @@ boolean contactModeOk(){
     return result
 }
 boolean contactsAreOpen(){
-    def s = contacts.size()
-    def i = 0
-
-    def openList = contacts.findAll{it.currentValue("contact") == "open"}
+ 
+    def openList = contacts?.findAll{it.currentValue("contact") == "open"}
+    openList = openList != null ? openList : []
 
     logging("Currently Open Contacts $openList")
     return openList.size() > 0
